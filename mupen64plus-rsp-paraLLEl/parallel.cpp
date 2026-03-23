@@ -121,6 +121,11 @@ extern "C"
 		*RSP::rsp.SP_PC_REG = 0x00000000;
 	}
 
+	EXPORT void CALL parallelRSPSetExternalAllocator(const JitExternalAllocator *alloc)
+	{
+		SetJitExternalAllocator(alloc);
+	}
+
 	EXPORT void CALL parallelRSPInitiateRSP(RSP_INFO Rsp_Info, unsigned int *CycleCount)
 	{
 		if (CycleCount)

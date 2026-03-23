@@ -30,6 +30,45 @@
 #include "GLideN64_libretro.h"
 #include "mupen64plus-next_common.h"
 
+#if defined(IOS) && defined(HAVE_PARALLEL_RSP)
+struct JitExternalAllocator
+{
+   void *(*reserve)(size_t size, void **writable, void *ctx);
+   void (*release)(void *code, void *writable, size_t size, void *ctx);
+   void *ctx;
+};
+extern void parallelRSPSetExternalAllocator(const struct JitExternalAllocator *alloc);
+
+static void *mupen_jit_reserve(size_t size, void **writable, void *ctx)
+{
+   log_cb(RETRO_LOG_INFO, "mupen_jit_reserve: requesting %lu bytes\n", (unsigned long)size);
+   struct retro_exec_mem_alloc alloc;
+   memset(&alloc, 0, sizeof(alloc));
+   alloc.version = 1;
+   alloc.size = size;
+   if (environ_cb &&
+       environ_cb(RETRO_ENVIRONMENT_EXEC_MEM_ALLOC, &alloc) &&
+       alloc.mode != RETRO_EXEC_MEM_MODE_UNAVAILABLE &&
+       alloc.rx != NULL)
+   {
+      *writable = (alloc.mode == RETRO_EXEC_MEM_MODE_DUAL_MAP) ? alloc.rw : NULL;
+      return alloc.rx;
+   }
+   return NULL;
+}
+
+static void mupen_jit_release(void *code, void *writable, size_t size, void *ctx)
+{
+   struct retro_exec_mem_free f;
+   memset(&f, 0, sizeof(f));
+   f.rx = code;
+   if (environ_cb)
+      environ_cb(RETRO_ENVIRONMENT_EXEC_MEM_FREE, &f);
+}
+
+static struct JitExternalAllocator s_mupen_jit_alloc = { mupen_jit_reserve, mupen_jit_release, NULL };
+#endif
+
 #include <libco.h>
 
 #ifdef HAVE_LIBNX
@@ -999,20 +1038,49 @@ static void update_variables(bool startup)
        }
        
 #ifdef IOS
-       bool can_jit = false;
-       if (!environ_cb(RETRO_ENVIRONMENT_GET_JIT_CAPABLE, &can_jit) || !can_jit)
        {
-          if(current_rsp_type == RSP_PLUGIN_PARALLEL)
+          bool can_jit = false;
+          struct retro_exec_mem_alloc probe;
+          memset(&probe, 0, sizeof(probe));
+          probe.version = 1;
+          probe.size = 0;
+          if (environ_cb(RETRO_ENVIRONMENT_EXEC_MEM_ALLOC, &probe))
           {
-#if defined(HAVE_LLE)
-             plugin_connect_rsp_api(RSP_PLUGIN_CXD4);
-             log_cb(RETRO_LOG_INFO, "Selected Parallel RSP without JIT, falling back to CXD4!\n");
-#else
-             log_cb(RETRO_LOG_INFO, "Selected Parallel RSP without JIT, falling back to GLideN64!\n");
-             plugin_connect_rsp_api(RSP_PLUGIN_HLE);
-             plugin_connect_rdp_api(RDP_PLUGIN_GLIDEN64);
-#endif
+             log_cb(RETRO_LOG_INFO, "EXEC_MEM_ALLOC probe: mode=%u\n", probe.mode);
+             if (probe.mode != RETRO_EXEC_MEM_MODE_UNAVAILABLE)
+                can_jit = true;
           }
+          else
+          {
+             log_cb(RETRO_LOG_INFO, "EXEC_MEM_ALLOC not supported, trying JIT_CAPABLE\n");
+             if (!environ_cb(RETRO_ENVIRONMENT_GET_JIT_CAPABLE, &can_jit))
+                can_jit = false;
+          }
+          if (!can_jit)
+          {
+             if(current_rsp_type == RSP_PLUGIN_PARALLEL)
+             {
+#if defined(HAVE_LLE)
+                plugin_connect_rsp_api(RSP_PLUGIN_CXD4);
+                log_cb(RETRO_LOG_INFO, "Selected Parallel RSP without JIT, falling back to CXD4!\n");
+#else
+                log_cb(RETRO_LOG_INFO, "Selected Parallel RSP without JIT, falling back to GLideN64!\n");
+                plugin_connect_rsp_api(RSP_PLUGIN_HLE);
+                plugin_connect_rdp_api(RDP_PLUGIN_GLIDEN64);
+#endif
+             }
+          }
+#if defined(HAVE_PARALLEL_RSP)
+          else if (current_rsp_type == RSP_PLUGIN_PARALLEL)
+          {
+             log_cb(RETRO_LOG_INFO, "Setting external JIT allocator for Parallel RSP\n");
+             parallelRSPSetExternalAllocator(&s_mupen_jit_alloc);
+          }
+          else
+          {
+             log_cb(RETRO_LOG_INFO, "NOT setting JIT allocator: can_jit=%d rsp_type=%d\n", can_jit, current_rsp_type);
+          }
+#endif
        }
 #endif
 

@@ -2187,9 +2187,12 @@ _jmpi(jit_state_t *_jit, jit_word_t i0)
 {
     jit_int32_t		reg;
     jit_word_t		d, w;
+    int			in_buffer;
     w = _jit->pc.w;
     d = (i0 - w) >> 2;
-    if (s26_p(d))
+    in_buffer = _jit->user_code ? (i0 >= (jit_word_t)_jit->code.ptr &&
+                                   i0 < (jit_word_t)_jit->code.ptr + _jit->code.length) : 1;
+    if (s26_p(d) && in_buffer)
 	B(d);
     else {
 	reg = jit_get_reg(jit_class_gpr|jit_class_nospill);
@@ -2219,7 +2222,7 @@ _calli(jit_state_t *_jit, jit_word_t i0)
     jit_word_t		d, w;
     w = _jit->pc.w;
     d = (i0 - w) >> 2;
-    if (s26_p(d))
+    if (s26_p(d) && !_jit->user_code)
 	BL(d);
     else {
 	reg = jit_get_reg(jit_class_gpr);

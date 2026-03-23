@@ -33,7 +33,10 @@ namespace JIT
 CPU::CPU()
 {
 	init_jit("RSP");
-	init_jit_thunks();
+	// Defer init_jit_thunks() until first enter() so the frontend has a
+	// chance to install an external JIT allocator before any code is
+	// allocated. The CPU object is a global, so its constructor runs at
+	// library load time — long before retro_load_game().
 }
 
 CPU::~CPU()
@@ -431,17 +434,15 @@ void CPU::init_jit_thunks()
 		abort();
 	jit_set_code(thunk_code, code_size);
 
-	thunks.enter_frame = reinterpret_cast<int (*)(void *)>(jit_emit());
-	thunks.enter_thunk = jit_address(entry_label);
-	thunks.return_thunk = jit_address(return_label);
+	void *emitted = jit_emit();
+	thunks.enter_frame = reinterpret_cast<int (*)(void *)>(allocator.to_executable(emitted));
+	thunks.enter_thunk = allocator.to_executable(jit_address(entry_label));
+	thunks.return_thunk = allocator.to_executable(jit_address(return_label));
 
-	//printf(" === DISASM ===\n");
-	//jit_disassemble();
 	jit_clear_state();
-	//printf(" === END DISASM ===\n");
 	jit_destroy_state();
 
-	if (!Allocator::commit_code(thunk_code, code_size))
+	if (!allocator.commit_code(allocator.to_executable(thunk_code), code_size))
 		abort();
 }
 
@@ -470,6 +471,8 @@ Func CPU::get_jit_block(uint32_t pc)
 
 int CPU::enter(uint32_t pc)
 {
+	if (!thunks.enter_frame)
+		init_jit_thunks();
 	// Top level enter.
 	state.pc = pc;
 	static_assert(offsetof(CPU, state) == 0, "CPU state must lie on first byte.");
@@ -1901,7 +1904,7 @@ Func CPU::jit_region(uint64_t hash, unsigned pc_word, unsigned instruction_count
 		abort();
 	jit_set_code(block_code, code_size);
 
-	auto ret = reinterpret_cast<Func>(jit_emit());
+	auto ret = reinterpret_cast<Func>(allocator.to_executable(jit_emit()));
 
 #ifdef TRACE_DISASM
 	printf(" === DISASM ===\n");
@@ -1912,7 +1915,7 @@ Func CPU::jit_region(uint64_t hash, unsigned pc_word, unsigned instruction_count
 	jit_clear_state();
 	jit_destroy_state();
 
-	if (!Allocator::commit_code(block_code, code_size))
+	if (!allocator.commit_code(allocator.to_executable(block_code), code_size))
 		abort();
 	return ret;
 }
